@@ -26,7 +26,7 @@ fully offline on local models through Ollama.
 Requires Node.js 20 or later.
 
 ```bash
-git clone <this repo> jaccode && cd jaccode
+git clone https://github.com/hernandeztien51-crypto/Jaccode jaccode && cd jaccode
 npm install && npm run build
 npm link        # puts `jaccode` and `jc` on your PATH
 ```
@@ -181,7 +181,7 @@ jaccode eval --only fizzbuzz,sum_tree --record runs.jsonl
 3. Optional reinforcement learning with the Jac compiler as the reward.
 4. A ~1.4 GB GGUF file you run through Ollama.
 
-The quickest start is `training/jaccode_pipeline.ipynb` in Google Colab. It runs the whole pipeline, from installing
+The quickest start is the pipeline notebook in Google Colab: [open it in Colab](https://colab.research.google.com/github/hernandeztien51-crypto/Jaccode/blob/main/training/jaccode_pipeline.ipynb). It runs the whole pipeline, from installing
 Jac to a before/after score. Details are in `training/README.md`, and the research behind it is in `reports/`.
 
 ## Configuration

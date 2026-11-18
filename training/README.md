@@ -1,6 +1,6 @@
 # Training jaccode's own Jac model
 
-**Fastest way:** open `jaccode_pipeline.ipynb` in Google Colab. It runs everything below on a free GPU and ends with
+**Fastest way:** [open `jaccode_pipeline.ipynb` in Google Colab](https://colab.research.google.com/github/hernandeztien51-crypto/Jaccode/blob/main/training/jaccode_pipeline.ipynb). It runs everything below on a free GPU and ends with
 a before/after score:
 1. Install Jac, Node and Ollama.
 2. Check the benchmark against the real compiler.

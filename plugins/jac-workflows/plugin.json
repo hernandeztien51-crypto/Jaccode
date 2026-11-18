@@ -1,0 +1,31 @@
+{
+  "name": "jac-workflows",
+  "description": "Step-by-step workflows that make Jac changes correct the first time",
+  "prompt": "prompt.md",
+  "commands": {
+    "tdd": {
+      "description": "test-first: write failing Jac tests, then the code: /tdd a stack with max()",
+      "prompt": "Build this test-first in Jac: $ARGS\n\n1. Find where it belongs (outline, grep) and the existing test style.\n2. Write `test` blocks that describe the behaviour, including edge cases and one error case (`with testraises(...)`). Never name files test_*.jac.\n3. Run `jac test` and confirm the new tests fail for the right reason.\n4. Implement the smallest code that passes. Run `jac check`, then `jac test`, and fix until both pass.\n5. Summarize what you added and paste the final test result line."
+    },
+    "port": {
+      "description": "port a Python file to idiomatic Jac with tests: /port utils.py",
+      "prompt": "Port this Python to idiomatic Jac: $ARGS\n\n1. Read the Python fully and list its public functions/classes and behaviour.\n2. Write the .jac file next to it: typed parameters and returns, `obj` for dataclass-like classes, `glob` for module state, brace imports without `;`, `with entry:__main__` for script code.\n3. Translate any Python tests or doctests into Jac `test` blocks in a `<name>.test.jac` annex (or write a few if none exist).\n4. Run `jac check` and `jac test` until both pass. Report anything whose behaviour had to change."
+    },
+    "graph": {
+      "description": "design a node/edge/walker model before coding: /graph a course planner",
+      "prompt": "Design the object-spatial model for: $ARGS\n\n1. Propose the nodes (with `has` fields), typed edges (with fields if relationships carry data) and walkers (what each one visits and reports). Keep it minimal; prefer typed edges over storing ids.\n2. Show it as a short table and a tiny ASCII sketch of the graph.\n3. Ask me to confirm before writing code only if the request is ambiguous; otherwise implement it, with one test per walker using `root spawn` and `.reports`.\n4. Run `jac check` and `jac test` until both pass."
+    },
+    "refactor": {
+      "description": "refactor without changing behaviour, verified by tests: /refactor split cli.jac",
+      "prompt": "Refactor, keeping behaviour identical: $ARGS\n\n1. Run the existing tests first and record the result. If there are none covering this code, add characterization tests that pin current behaviour.\n2. Make the change in small steps, running `jac check` after each.\n3. Run the tests again; they must give the same results as step 1.\n4. Summarize the before/after structure and the test results."
+    },
+    "explain": {
+      "description": "explain code with an outline and a walkthrough: /explain src/graph.jac",
+      "prompt": "Explain this code to me: $ARGS\n\nStart with the outline tool for structure, then read the important parts. Give: (1) what it does in two sentences, (2) the main pieces and how data flows between them, (3) for Jac graph code, which walkers visit which nodes and what they report, (4) anything surprising or risky. Don't change any files."
+    },
+    "fixall": {
+      "description": "fix every Jac error in a file or folder, guided by the diagnostics: /fixall src/",
+      "prompt": "Make `jac check` pass for: $ARGS (default: the whole project).\n\nRun `jac check`, then fix errors in order: syntax first, then imports, then types. Read the guide each diagnostic points to when the fix isn't obvious. Re-run after each batch of fixes. Don't silence errors with `# jac:ignore` unless the error is a confirmed false positive, and say so if you do. Finish with the final `jac check` result."
+    }
+  }
+}

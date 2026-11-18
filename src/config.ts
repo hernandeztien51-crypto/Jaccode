@@ -14,9 +14,19 @@ export interface Config {
   ollamaHost?: string;
   /** Compact prompt, core tools and short tool output for small models. Default: on for Ollama. */
   lite?: boolean;
+  /** Plugins to turn on (if off by default) or off. */
+  plugins?: { enable?: string[]; disable?: string[] };
 }
 
-export const DEFAULT_MODELS = { anthropic: "claude-opus-5-5", ollama: "qwen3-coder" } as const;
+/** Free default: Qwen3.5-4B (Apache 2.0, ~2.7 GB), downloaded automatically on first use. Swap in your trained model. */
+export const DEFAULT_MODELS = { anthropic: "claude-opus-5-5", ollama: "hf.co/unsloth/Qwen3.5-4B-GGUF:Q4_K_M" } as const;
+
+/** True when Claude credentials look available (env vars or an `ant auth login` profile). */
+export function hasAnthropicCredentials(): boolean {
+  if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE) return true;
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  return fs.existsSync(path.join(home, ".config", "anthropic"));
+}
 
 const DEFAULTS: Config = {
   provider: "anthropic",
@@ -48,13 +58,21 @@ export function loadConfig(root: string, flags: Partial<Config>): Config {
   if (process.env.JACCODE_MODEL) env.model = process.env.JACCODE_MODEL;
   if (process.env.JACCODE_EFFORT) env.effort = process.env.JACCODE_EFFORT as Effort;
 
+  const files = { ...readJson(path.join(globalDir(), "config.json")), ...readJson(path.join(root, ".jaccode.json")) };
+  const fileProvider = files.provider;
+  const fileModel = files.model;
   const merged: Config = {
     ...DEFAULTS,
-    ...readJson(path.join(globalDir(), "config.json")),
-    ...readJson(path.join(root, ".jaccode.json")),
+    ...files,
     ...env,
     ...stripUndefined(flags),
   };
+  // No provider chosen anywhere and no Claude credentials: use the free local model.
+  const chosen = flags.provider ?? env.provider ?? fileProvider;
+  if (!chosen && !(flags.model ?? env.model ?? fileModel) && !hasAnthropicCredentials()) {
+    merged.provider = "ollama";
+    merged.model = DEFAULT_MODELS.ollama;
+  }
   // Picking a provider without a model picks that provider's default model.
   const explicitModel = flags.model ?? env.model;
   if (!explicitModel && (flags.provider ?? env.provider) && merged.provider !== DEFAULTS.provider) {

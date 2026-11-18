@@ -46,6 +46,7 @@ export class OllamaProvider implements Provider {
   private messages: OllamaMessage[] = [];
   private callNames = new Map<string, string>();
   private counter = 0;
+  private pulled = new Set<string>();
 
   constructor(opts: OllamaOptions) {
     this.model = opts.model;
@@ -86,19 +87,28 @@ export class OllamaProvider implements Provider {
       options: { num_ctx: this.numCtx },
     };
 
-    let res: Response;
-    try {
-      res = await fetch(`${this.host}/api/chat`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-    } catch (err) {
-      if (signal.aborted) throw err;
-      throw new Error(
-        `Could not reach Ollama at ${this.host}. Start it with \`ollama serve\` and pull a model, e.g. \`ollama pull ${this.model}\`.`,
-      );
+    const post = async () => {
+      try {
+        return await fetch(`${this.host}/api/chat`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (err) {
+        if (signal.aborted) throw err;
+        throw new Error(
+          `Could not reach Ollama at ${this.host}. Install it from https://ollama.com and start it with \`ollama serve\`.`,
+        );
+      }
+    };
+    let res = await post();
+    if (res.status === 404 && !this.pulled.has(this.model)) {
+      // The model isn't downloaded yet: fetch it once, then retry.
+      const detail = await res.text().catch(() => "");
+      if (!/not found/i.test(detail)) throw new Error(`Ollama returned 404: ${detail}`);
+      await this.pull(onEvent, signal);
+      res = await post();
     }
     if (!res.ok || !res.body) {
       throw new Error(`Ollama returned ${res.status}: ${await res.text().catch(() => "")}`);
@@ -166,6 +176,41 @@ export class OllamaProvider implements Provider {
     if (toolCalls.length) return { text, toolCalls, stop: "tool_use", usage };
     if (doneReason === "length") return { text, toolCalls: [], stop: "max_tokens", usage };
     return { text, toolCalls: [], stop: "end", usage };
+  }
+
+  /** Downloads the model through Ollama, reporting progress every 10%. */
+  private async pull(onEvent: (e: StreamEvent) => void, signal: AbortSignal): Promise<void> {
+    onEvent({ type: "notice", text: `downloading ${this.model} (first use only)…` });
+    const res = await fetch(`${this.host}/api/pull`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: this.model, stream: true }),
+      signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`Could not download ${this.model}: ${await res.text().catch(() => res.status)}`);
+    const decoder = new TextDecoder();
+    let buf = "";
+    let lastPct = -10;
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      buf += decoder.decode(chunk, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const d = JSON.parse(line) as { status?: string; completed?: number; total?: number; error?: string };
+        if (d.error) throw new Error(`Could not download ${this.model}: ${d.error}`);
+        if (d.total && d.completed) {
+          const pct = Math.floor((d.completed / d.total) * 100);
+          if (pct >= lastPct + 10) {
+            lastPct = pct - (pct % 10);
+            onEvent({ type: "notice", text: `downloading ${this.model}: ${pct}% of ${(d.total / 1e9).toFixed(1)} GB` });
+          }
+        }
+      }
+    }
+    this.pulled.add(this.model);
+    onEvent({ type: "notice", text: `${this.model} ready` });
   }
 
   reset(): void {

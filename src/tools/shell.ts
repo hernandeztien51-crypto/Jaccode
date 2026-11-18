@@ -126,25 +126,33 @@ export const JAC_MISSING =
   `The \`jac\` CLI is not installed. Ask the user to install it with: ${JAC_INSTALL} ` +
   "(the pip package is outdated). Until then, review the Jac code by reading it carefully.";
 
+/** Maps the tool's actions to real `jac` subcommands (Jac 0.40: formatting is `jac fmt`). */
+export function jacArgs(action: string): string[] {
+  if (action === "format") return ["fmt"];
+  if (action === "lint") return ["check", "--lint", "--fix"];
+  return [action];
+}
+
 export const jac = defineTool({
   name: "jac",
   description:
     "Run the Jac toolchain. `check` type-checks a file and reports errors, `run` executes it, `test` runs its " +
-    "test blocks, `format` reformats it in place, `guide` prints an official Jac guide (target = guide name, " +
+    "test blocks, `format` reformats it in place (jac fmt), `lint` applies auto-fixable lint corrections, " +
+    "`guide` prints an official Jac guide (target = guide name, " +
     "e.g. jac-types, jac-walker-patterns; target \"\" lists them). Always `check` Jac code you wrote before saying it works.",
   kind: "exec",
   schema: z.object({
-    action: z.enum(["check", "run", "test", "format", "guide"]),
+    action: z.enum(["check", "run", "test", "format", "lint", "guide"]),
     target: z.string().describe("A .jac file relative to the project root, or a guide name for `guide`"),
     args: z.array(z.string()).optional().describe("Extra arguments passed to the jac command"),
   }),
-  summary: (i) => `jac ${i.action} ${i.target}`.trim(),
-  command: (i) => `jac ${i.action} ${i.target}${i.args?.length ? " " + i.args.join(" ") : ""}`.trim(),
+  summary: (i) => `jac ${jacArgs(i.action).join(" ")} ${i.target}`.trim(),
+  command: (i) => `jac ${jacArgs(i.action).join(" ")} ${i.target}${i.args?.length ? " " + i.args.join(" ") : ""}`.trim(),
   async run(i, ctx) {
     if (!findJac()) throw new ToolError(JAC_MISSING);
     const target = i.action === "guide" ? i.target.trim() : resolveInRoot(ctx.root, i.target);
-    const args = [i.action, ...(target ? [target] : []), ...(i.args ?? [])];
+    const args = [...jacArgs(i.action), ...(target ? [target] : []), ...(i.args ?? [])];
     const r = await runJac(args, ctx.root, ctx.signal);
-    return i.action === "guide" || i.action === "format" ? formatShell(r, 180_000) : formatJacResult(r, 180_000);
+    return i.action === "guide" ? formatShell(r, 180_000) : formatJacResult(r, 180_000);
   },
 });

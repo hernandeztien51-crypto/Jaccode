@@ -1,0 +1,15 @@
+{
+  "name": "jac-guides",
+  "description": "Routes Jac work to the official guides that ship with the jac binary",
+  "prompt": "prompt.md",
+  "commands": {
+    "guide": {
+      "description": "read an official Jac guide, then apply it: /guide jac-walker-patterns add a walker that ...",
+      "prompt": "Use the jac tool with action \"guide\" to read the official Jac guide named in this request (if none is named, pick the right one from the routing table, or list them with an empty target). Read only the sections you need. Then do what the request asks, following the guide exactly. Request: $ARGS"
+    },
+    "learn": {
+      "description": "explain a Jac topic with a short verified example: /learn typed edges",
+      "prompt": "Teach me this Jac topic: $ARGS\n\n1. Read the matching official guide with the jac tool (action \"guide\").\n2. Explain it in plain language in under 150 words.\n3. Write one small complete example to a scratch file named learn_example.jac, run `jac check` and `jac run` on it, and fix it until both pass.\n4. Show the final example and its output, then delete learn_example.jac."
+    }
+  }
+}

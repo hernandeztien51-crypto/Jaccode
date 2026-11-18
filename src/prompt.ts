@@ -94,6 +94,8 @@ const LITE_RULES = `# How to work
 export interface PromptOptions {
   /** Compact prompt for small local models. */
   lite?: boolean;
+  /** Extra guidance appended at the end, e.g. from plugins. */
+  extra?: string;
 }
 
 export function buildSystemPrompt(root: string, opts: PromptOptions = {}): { prompt: string; info: PromptInfo } {
@@ -140,6 +142,8 @@ export function buildSystemPrompt(root: string, opts: PromptOptions = {}): { pro
           .join("\n\n"),
     );
   }
+
+  if (opts.extra) sections.push(opts.extra);
 
   return {
     prompt: sections.join("\n\n"),

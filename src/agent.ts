@@ -8,6 +8,7 @@ import { toSpec, ToolError, type Todo, type Tool, type ToolContext } from "./too
 import { PathError } from "./paths.js";
 import type { Provider, StreamEvent, ToolCall, ToolResult, ToolSpec, Usage } from "./types.js";
 import type { Recorder } from "./recorder.js";
+import { fillCommand, matchGlob, type EditHook } from "./plugins.js";
 import { addUsage, emptyUsage } from "./types.js";
 
 export type Answer = "yes" | "no" | "always";
@@ -37,6 +38,8 @@ export interface AgentOptions {
   tools?: Tool[];
   /** Records each run as a training trajectory. */
   recorder?: Recorder;
+  /** Plugin hooks run after a file is written or edited. */
+  editHooks?: EditHook[];
   /** Cap on each tool result sent to the model; small local models need short context. */
   maxResultChars?: number;
 }
@@ -63,6 +66,7 @@ export class Agent {
   private specs: ToolSpec[];
   recorder?: Recorder;
   maxResultChars?: number;
+  editHooks: EditHook[];
 
   constructor(o: AgentOptions) {
     this.root = o.root;
@@ -76,6 +80,7 @@ export class Agent {
     this.tools = o.tools ?? ALL_TOOLS;
     this.recorder = o.recorder;
     this.maxResultChars = o.maxResultChars;
+    this.editHooks = o.editHooks ?? [];
     this.specs = this.tools.map(toSpec);
   }
 
@@ -241,11 +246,13 @@ export class Agent {
 
     this.ui.toolStart(tool.name, summary);
     try {
-      const output = await tool.run(input, ctx);
+      let output = await tool.run(input, ctx);
       this.ui.toolEnd(tool.name, output, false);
       if (tool.name === "todo_write") this.ui.todos(this.todos);
       if (tool.kind === "write" && typeof (input as { path?: unknown }).path === "string") {
-        changed.add(path.resolve(this.root, (input as { path: string }).path));
+        const abs = path.resolve(this.root, (input as { path: string }).path);
+        changed.add(abs);
+        output += await this.runEditHooks(abs, signal);
       }
       if (tool.name === "bash") changed.add("(shell)");
       return { id: call.id, content: this.cap(output || "(no output)") };
@@ -289,6 +296,28 @@ export class Agent {
       "or explain why the failure is unrelated to your change:\n\n" +
       failures.join("\n\n")
     );
+  }
+
+  /**
+   * Runs plugin hooks matching an edited file (formatters, linters). Their output is appended to the tool
+   * result so the model sees it; a hook that rewrites the file refreshes the read-tracking so the next
+   * edit isn't refused as stale.
+   */
+  private async runEditHooks(abs: string, signal: AbortSignal): Promise<string> {
+    const rel = path.relative(this.root, abs).split(path.sep).join("/");
+    const notes: string[] = [];
+    for (const h of this.editHooks.filter((h) => matchGlob(h.match, rel))) {
+      const cmd = fillCommand(h.command, { file: rel });
+      const timeout = (h.timeout ?? 60) * 1000;
+      this.ui.toolStart("hook", `hook: ${cmd}`);
+      const r = await runShell(cmd, this.root, timeout, signal);
+      const out = formatShell(r, timeout);
+      const failed = r.code !== 0 || r.timedOut;
+      this.ui.toolEnd("hook", out, failed);
+      if (failed || r.stdout.trim() || r.stderr.trim()) notes.push(`[hook ${cmd}]\n${out.slice(-2000)}`);
+    }
+    if (fs.existsSync(abs) && this.readFiles.has(abs)) this.readFiles.set(abs, fs.statSync(abs).mtimeMs);
+    return notes.length ? `\n\n${notes.join("\n\n")}` : "";
   }
 
   private find(name: string): Tool | undefined {

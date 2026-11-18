@@ -55,7 +55,7 @@ export function isReadOnlyCommand(command: string): boolean {
     const words = seg.split(/\s+/);
     const cmd = words[0]!;
     if (cmd === "git") return SAFE_GIT.has(words[1] ?? "");
-    if (cmd === "jac") return ["check", "guide", "--version", "--help"].includes(words[1] ?? "");
+    if (cmd === "jac") return ["check", "guide", "--version", "--help"].includes(words[1] ?? "") && !words.includes("--fix");
     if (cmd === "find") return !words.some((w) => w === "-delete" || w === "-exec" || w === "-execdir");
     if (SAFE_VERSION_TOOLS.has(cmd)) return words.length === 2 && /^(--version|-v|-V|version)$/.test(words[1]!);
     return SAFE_COMMANDS.has(cmd) || SAFE_WINDOWS.has(cmd.toLowerCase());
@@ -96,6 +96,6 @@ export class Permissions {
 /** First word, or first two for tools with subcommands (`npm test`, `git commit`). */
 export function commandPrefix(command: string): string {
   const words = command.trim().split(/\s+/);
-  const multi = new Set(["npm", "pnpm", "yarn", "git", "jac", "cargo", "go", "python", "python3", "pip", "npx", "make", "docker"]);
+  const multi = new Set(["fetch", "npm", "pnpm", "yarn", "git", "jac", "cargo", "go", "python", "python3", "pip", "npx", "make", "docker"]);
   return multi.has(words[0]!) && words[1] ? `${words[0]} ${words[1]}` : words[0]!;
 }

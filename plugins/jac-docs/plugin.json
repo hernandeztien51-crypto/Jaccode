@@ -1,0 +1,11 @@
+{
+  "name": "jac-docs",
+  "description": "Answer Jac questions from the official docs site with sources",
+  "prompt": "prompt.md",
+  "commands": {
+    "docs": {
+      "description": "answer a question from docs.jaseci.org with links: /docs how do I persist nodes",
+      "prompt": "Answer from the official Jac documentation: $ARGS\n\n1. Check the installed guides first (jac tool, action \"guide\").\n2. If that isn't enough, fetch https://docs.jaseci.org/llms.txt to find the right pages, then fetch those pages (several at once).\n3. Answer concisely with a small example. If you write example code, verify it with `jac check`.\n4. End with the links you used."
+    }
+  }
+}

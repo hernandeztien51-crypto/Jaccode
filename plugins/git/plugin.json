@@ -1,0 +1,14 @@
+{
+  "name": "git",
+  "description": "Review changes and write commits",
+  "commands": {
+    "review": {
+      "description": "review uncommitted changes for bugs before you commit (no edits)",
+      "prompt": "Review my uncommitted changes for bugs. Run `git status` and `git diff` (and `git diff --staged`). For each real problem give: file:line, what goes wrong, and a concrete failing scenario. Rank by severity. Ignore style nits. Also run `jac check` on changed .jac files and the relevant tests, and report the results. Don't edit any files. Extra focus, if any: $ARGS"
+    },
+    "commit": {
+      "description": "commit the current changes with a clear message",
+      "prompt": "Commit my current changes. Look at `git status` and `git diff`. If unrelated changes are mixed together, tell me and suggest how to split them instead of committing. Otherwise write a message: an imperative summary line under 72 characters, a blank line, then a short body explaining why. Stage the relevant files explicitly (no `git add -A` of unknown files) and commit. Don't push. Notes from me: $ARGS"
+    }
+  }
+}

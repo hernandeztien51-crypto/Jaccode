@@ -51,6 +51,10 @@ export const grep = defineTool({
   summary: (i) => `grep ${JSON.stringify(i.pattern)}${i.glob ? ` in ${i.glob}` : ""}`,
   async run(i, ctx) {
     const target = resolveInRoot(ctx.root, i.path ?? ".");
+    const root = fs.realpathSync(ctx.root);
+    // Search from the project root with a relative target so results come back project-relative on every OS
+    // (Windows temp folders have a short and a long name, so stripping an absolute prefix is unreliable).
+    const relTarget = path.relative(root, target);
     const max = i.max_results ?? 200;
     let output: string;
     if (hasRipgrep()) {
@@ -59,19 +63,19 @@ export const grep = defineTool({
       if (i.context) args.push("-C", String(i.context));
       if (i.glob) args.push("--glob", i.glob);
       for (const g of IGNORE) args.push("--glob", `!${g.replace(/^\*\*\//, "").replace(/\/\*\*$/, "")}`);
-      args.push("--", i.pattern, target);
-      const res = spawnSync("rg", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+      args.push("--", i.pattern);
+      args.push(relTarget || ".");
+      const res = spawnSync("rg", args, { cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
       if (res.status === 2) throw new ToolError(res.stderr.trim() || "ripgrep failed");
       output = res.stdout;
     } else {
-      output = jsGrep(target, i.pattern, !!i.ignore_case, i.glob);
+      output = jsGrep(target, root, i.pattern, !!i.ignore_case, i.glob);
     }
-    const prefix = fs.realpathSync(ctx.root) + path.sep;
     const lines = output
       .split("\n")
       .filter(Boolean)
-      .map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l))
-      .map((l) => (path.sep === "\\" ? l.replace(/^[^:]+/, (p) => p.replace(/\\/g, "/")) : l));
+      .map((l) => (path.sep === "\\" ? l.replace(/^[^:]+/, (p) => p.replace(/\\/g, "/")) : l))
+      .map((l) => l.replace(/^\.\//, ""));
     if (lines.length === 0) return "No matches.";
     const shown = lines.slice(0, max);
     if (lines.length > max) shown.push(`… ${lines.length - max} more matches (narrow the search)`);
@@ -80,7 +84,7 @@ export const grep = defineTool({
 });
 
 /** Fallback when ripgrep isn't installed. */
-function jsGrep(target: string, pattern: string, ignoreCase: boolean, globPat?: string): string {
+function jsGrep(target: string, root: string, pattern: string, ignoreCase: boolean, globPat?: string): string {
   let re: RegExp;
   try {
     re = new RegExp(pattern, ignoreCase ? "i" : "");
@@ -101,7 +105,7 @@ function jsGrep(target: string, pattern: string, ignoreCase: boolean, globPat?: 
       continue;
     }
     text.split("\n").forEach((line, n) => {
-      if (re.test(line)) out.push(`${f}:${n + 1}:${line.slice(0, 400)}`);
+      if (re.test(line)) out.push(`${path.relative(root, f)}:${n + 1}:${line.slice(0, 400)}`);
     });
     if (out.length > 5000) break;
   }

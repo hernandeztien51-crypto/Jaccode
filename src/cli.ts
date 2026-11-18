@@ -17,6 +17,7 @@ import { listSessions, loadSession, newSessionId, saveSession } from "./session.
 import { runShell, formatShell, formatJacResult, runJac, findJac, JAC_MISSING } from "./tools/shell.js";
 import { PrintUI, TerminalUI, colorDiff, renderTodos } from "./ui.js";
 import { LineReader } from "./lines.js";
+import { expandCommand, loadPlugins, pluginPrompt } from "./plugins.js";
 import { Recorder } from "./recorder.js";
 import { runEval, summarize } from "./eval.js";
 import type { Effort, PermissionMode, Provider } from "./types.js";
@@ -79,6 +80,7 @@ const SLASH_HELP = `${pc.bold("Commands")}
   /clear                start a fresh conversation (files are kept)
   /sessions             list saved sessions for this project
   /resume <id>          load a saved session
+  /plugins              list plugins, their commands and tools
   /exit                 quit (also Ctrl+D)
 
 ${pc.bold("Input")}
@@ -271,7 +273,18 @@ async function main(): Promise<void> {
   }
 
   const lite = liteFor(cfg.provider);
-  const { prompt: system, info } = buildSystemPrompt(root, { lite });
+  const { plugins, errors: pluginErrors } = loadPlugins(root, cfg.plugins);
+  const active = plugins.filter((p) => p.enabled);
+  const builtinNames = new Set(ALL_TOOLS.map((t) => t.name));
+  const pluginTools = active.flatMap((p) => p.tools).filter((t) => {
+    if (!builtinNames.has(t.name)) return true;
+    pluginErrors.push(`tool ${t.name} clashes with a built-in tool and was skipped`);
+    return false;
+  });
+  const pluginCommands = new Map(active.flatMap((p) => Object.entries(p.commands).map(([k, c]) => [k, { ...c, plugin: p.name }] as const)));
+  const extra = pluginPrompt(active);
+  const makeSystem = (liteOn: boolean) => buildSystemPrompt(root, { lite: liteOn, extra });
+  const { prompt: system, info } = makeSystem(lite);
   const printMode = flags.print !== undefined;
   const ui = printMode ? new PrintUI(!!flags.quiet) : new TerminalUI();
   const agent = new Agent({
@@ -283,13 +296,14 @@ async function main(): Promise<void> {
     verifyCommand: cfg.verifyCommand,
     autoJacCheck: cfg.autoJacCheck,
     recorder: flags.record ? new Recorder(flags.record) : undefined,
-    tools: lite ? LITE_TOOLS : ALL_TOOLS,
+    tools: [...(lite ? LITE_TOOLS : ALL_TOOLS), ...pluginTools],
+    editHooks: active.flatMap((p) => p.afterEdit),
     maxResultChars: lite ? LITE_RESULT_CHARS : undefined,
   });
   const applyLite = (on: boolean) => {
-    agent.setTools(on ? LITE_TOOLS : ALL_TOOLS);
+    agent.setTools([...(on ? LITE_TOOLS : ALL_TOOLS), ...pluginTools]);
     agent.maxResultChars = on ? LITE_RESULT_CHARS : undefined;
-    agent.system = buildSystemPrompt(root, { lite: on }).prompt;
+    agent.system = makeSystem(on).prompt;
   };
 
   let sessionId = newSessionId();
@@ -366,7 +380,7 @@ async function main(): Promise<void> {
   const tui = ui as TerminalUI;
   const lines = new LineReader(process.stdin, process.stdout, process.stdin.isTTY ?? false);
   tui.lines = lines;
-  console.log(banner(cfg, info, root) + (lite ? pc.dim("\n  small-model mode: short prompt, core tools (--no-lite to turn off)") : ""));
+  console.log(banner(cfg, info, root) + pc.dim(`\n  plugins: ${active.map((p) => p.name).join(", ") || "none"}${pluginErrors.length ? ` (${pluginErrors.length} problem(s), see /plugins)` : ""}`) + (lite ? pc.dim("\n  small-model mode: short prompt, core tools (--no-lite to turn off)") : ""));
   if (flags.resume) console.log(pc.dim(`  resumed session ${sessionId}: ${title}`));
   console.log();
 
@@ -451,7 +465,13 @@ async function main(): Promise<void> {
     switch (cmd) {
       case "help":
       case "?":
-        return void console.log(SLASH_HELP);
+        console.log(SLASH_HELP);
+        if (pluginCommands.size) {
+          console.log(pc.bold("Plugin commands"));
+          for (const [name, c] of pluginCommands) console.log(`  /${name.padEnd(20)}${c.description} ${pc.dim(`(${c.plugin})`)}`);
+          console.log();
+        }
+        return;
       case "exit":
       case "quit":
       case "q":
@@ -544,13 +564,13 @@ async function main(): Promise<void> {
         const file = path.join(root, "JAC.md");
         const prefix = fs.existsSync(file) ? (fs.readFileSync(file, "utf8").endsWith("\n") ? "" : "\n") : "# Project notes\n\n";
         fs.appendFileSync(file, `${prefix}- ${arg}\n`);
-        agent.system = buildSystemPrompt(root, { lite: liteFor(agent.provider.id) }).prompt;
+        agent.system = makeSystem(liteFor(agent.provider.id)).prompt;
         return void console.log(pc.dim("  saved to JAC.md"));
       }
       case "clear":
         persist();
         agent.reset();
-        agent.system = buildSystemPrompt(root, { lite: liteFor(agent.provider.id) }).prompt;
+        agent.system = makeSystem(liteFor(agent.provider.id)).prompt;
         sessionId = newSessionId();
         title = "";
         created = new Date().toISOString();
@@ -577,8 +597,26 @@ async function main(): Promise<void> {
         created = s.created;
         return void console.log(pc.dim(`  resumed ${s.id}: ${s.title}`));
       }
-      default:
+      case "plugins": {
+        if (!plugins.length) return void console.log(pc.dim("  no plugins found"));
+        for (const p of plugins) {
+          const parts = [
+            Object.keys(p.commands).length ? `commands: ${Object.keys(p.commands).map((c) => "/" + c).join(" ")}` : "",
+            p.tools.length ? `tools: ${p.tools.map((t) => t.name).join(", ")}` : "",
+            p.afterEdit.length ? `${p.afterEdit.length} edit hook(s)` : "",
+          ].filter(Boolean);
+          console.log(`  ${p.enabled ? pc.green("●") : pc.dim("○")} ${pc.bold(p.name)} ${pc.dim(`(${p.source})`)} ${p.description}`);
+          if (parts.length) console.log(pc.dim(`      ${parts.join(" · ")}`));
+        }
+        console.log(pc.dim('  Turn plugins on or off in .jaccode.json: { "plugins": { "enable": [...], "disable": [...] } }'));
+        for (const e of pluginErrors) console.log(pc.yellow(`  ⚠ ${e}`));
+        return;
+      }
+      default: {
+        const pc_ = pluginCommands.get(cmd);
+        if (pc_) return expandCommand(pc_, arg);
         console.log(pc.red(`  unknown command /${cmd}; try /help`));
+      }
     }
   }
 }

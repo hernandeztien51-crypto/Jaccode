@@ -39,6 +39,8 @@
   },
   "files": [
     "dist",
+    "plugins",
+    "evals",
     "README.md"
   ],
   "engines": {

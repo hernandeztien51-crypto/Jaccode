@@ -1,0 +1,8 @@
+{
+  "name": "jac-format",
+  "description": "Format .jac files with `jac fmt` after every edit (off by default: it rewrites whole files)",
+  "enabled": false,
+  "hooks": {
+    "afterEdit": [{ "match": "*.jac", "command": "jac fmt {{file}}", "timeout": 60 }]
+  }
+}

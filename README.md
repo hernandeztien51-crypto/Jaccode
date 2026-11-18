@@ -1,8 +1,11 @@
 # jaccode
 
 A terminal AI coding agent with first-class support for the [Jac language](https://www.jac-lang.org).
-It reads your project, plans, edits files, runs commands and checks its own work. It runs on Claude, or
-fully offline on local models through Ollama.
+It reads your project, plans, edits files, runs commands and checks its own work against the Jac compiler.
+
+**Free by default:** with no API key it runs a local open model through [Ollama](https://ollama.com), downloaded
+automatically the first time, so nothing leaves your machine. Claude is optional. It works on Windows, macOS and
+Linux; CI tests all three on every push.
 
 ```
 ◆ jaccode v0.1.0  claude-opus-5-5 · effort high · auto-edit
@@ -23,7 +26,7 @@ fully offline on local models through Ollama.
 
 ## Install
 
-Requires Node.js 20 or later.
+Requires Node.js 20 or later, on Windows, macOS or Linux.
 
 ```bash
 git clone https://github.com/hernandeztien51-crypto/Jaccode jaccode && cd jaccode
@@ -31,18 +34,24 @@ npm install && npm run build
 npm link        # puts `jaccode` and `jc` on your PATH
 ```
 
-For Jac work, install the Jac toolchain too (the `jaclang` pip package is outdated; Jac now ships as one binary):
+For Jac work, install the Jac toolchain too (the `jaclang` pip package is outdated; Jac now ships as one binary
+for macOS and Linux; on Windows, use WSL for Jac itself):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jaseci-labs/jaseci/main/scripts/install.sh | bash
 ```
 
-## Credentials
+On Windows, jaccode runs commands in Git Bash if it's installed, otherwise PowerShell. Set `JACCODE_SHELL` to choose.
 
-- **Claude (default):** set `ANTHROPIC_API_KEY`, or sign in once with `ant auth login`.
-- **Local models:** run `ollama serve`, pull a model with tool support (for example
-  `ollama pull qwen3-coder`), then start with `jaccode -m ollama:qwen3-coder`. Nothing leaves your machine
-  and no key is needed. Set `OLLAMA_HOST` if Ollama isn't on `localhost:11434`.
+## Models
+
+- **Free, local (default when no Claude key is set):** install [Ollama](https://ollama.com) and run
+  `ollama serve`. jaccode uses Qwen3.5-4B (Apache 2.0, ~2.7 GB) and downloads it on first use.
+  - Any other model: `jaccode -m ollama:<model>`, for example your own trained Jac model,
+    `-m ollama:jaccode-jac` (see Training below).
+  - Set `OLLAMA_HOST` if Ollama isn't on `localhost:11434`.
+- **Claude (optional, paid):** set `ANTHROPIC_API_KEY`, or sign in with `ant auth login`. jaccode then
+  defaults to `claude-opus-5-5`.
 
 ## Usage
 
@@ -124,6 +133,24 @@ see a project's structure without reading whole files.
 
 A small local model has less to get wrong and less context to fill. Use `--lite` to turn it on for any model, or
 `--no-lite` to turn it off.
+
+**Plugins.** Plugins add slash-command workflows, guidance, new tools and after-edit hooks (formatters, linters)
+from a `plugin.json`, with no code changes. Five are bundled:
+- `/tdd`, `/port`, `/graph`, `/refactor`, `/explain`, `/fixall` for Jac work.
+- `/guide` and `/learn`, which use the official guides that ship with `jac`.
+- `/review` and `/commit` for git.
+- `/docs`, which answers from docs.jaseci.org with links.
+- An optional `jac fmt` hook that formats after every edit.
+
+Add your own per user or per project; see `plugins/README.md`. `/plugins` lists what's loaded.
+
+**Fast fetching.** The `fetch` tool reads web pages, docs and raw files, several in parallel.
+- Connections are reused, and responses are capped in size.
+- Pages are converted to readable text, and GitHub file links are fetched raw.
+- A local cache returns recent pages instantly and rechecks older ones cheaply.
+- In testing it fetched two pages from Jac's docs site and GitHub, in parallel, in about 0.5 s, and 0 ms from
+  cache after that.
+- It asks once per website in the default permission mode.
 
 **Safe edits.**
 - A file can't be edited until it has been read. If it changed on disk since that read, the edit is
@@ -216,6 +243,9 @@ Layout:
 - `src/tools/`: the file, search, shell and Jac tools. Zod schemas generate the JSON Schema the model sees.
 - `src/jac/cheatsheet.ts`: the Jac notes in the prompt.
 - `src/eval.ts`: the benchmark runner.
+- `src/plugins.ts`: the plugin loader; bundled plugins are in `plugins/`.
+- `src/platform.ts`: shell selection and process handling for Windows, macOS and Linux.
+- `src/tools/fetch.ts`: the cached web fetch tool.
 - `src/recorder.ts`: training trajectories.
 - `src/checkpoints.ts`: undo and diff.
 - `src/cli.ts`: the REPL and flags.

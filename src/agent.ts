@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { Checkpoints } from "./checkpoints.js";
 import { Permissions, dangerReason } from "./permissions.js";
-import { runShell, findJac, formatShell } from "./tools/shell.js";
-import { ALL_TOOLS, toolByName } from "./tools/index.js";
+import { runShell, findJac, formatShell, formatJacResult } from "./tools/shell.js";
+import { ALL_TOOLS } from "./tools/index.js";
 import { toSpec, ToolError, type Todo, type Tool, type ToolContext } from "./tools/tool.js";
 import { PathError } from "./paths.js";
 import type { Provider, StreamEvent, ToolCall, ToolResult, ToolSpec, Usage } from "./types.js";
+import type { Recorder } from "./recorder.js";
 import { addUsage, emptyUsage } from "./types.js";
 
 export type Answer = "yes" | "no" | "always";
@@ -34,6 +35,10 @@ export interface AgentOptions {
   autoJacCheck?: boolean;
   maxSteps?: number;
   tools?: Tool[];
+  /** Records each run as a training trajectory. */
+  recorder?: Recorder;
+  /** Cap on each tool result sent to the model; small local models need short context. */
+  maxResultChars?: number;
 }
 
 /** Model tool calls stop being useful after this many identical repeats. */
@@ -56,6 +61,8 @@ export class Agent {
   private maxSteps: number;
   private tools: Tool[];
   private specs: ToolSpec[];
+  recorder?: Recorder;
+  maxResultChars?: number;
 
   constructor(o: AgentOptions) {
     this.root = o.root;
@@ -67,6 +74,8 @@ export class Agent {
     this.autoJacCheck = o.autoJacCheck ?? true;
     this.maxSteps = o.maxSteps ?? 150;
     this.tools = o.tools ?? ALL_TOOLS;
+    this.recorder = o.recorder;
+    this.maxResultChars = o.maxResultChars;
     this.specs = this.tools.map(toSpec);
   }
 
@@ -74,6 +83,7 @@ export class Agent {
   async run(userText: string, signal: AbortSignal): Promise<string> {
     this.checkpoints.beginTurn(userText.slice(0, 60));
     this.provider.addUserText(userText);
+    this.recorder?.start(this.system, this.specs, userText);
     const changed = new Set<string>();
     let lastText = "";
     let verifyRounds = 0;
@@ -86,6 +96,7 @@ export class Agent {
         if (signal.aborted) break;
         const result = await this.provider.turn(this.system, this.specs, (e) => this.ui.onEvent(e), signal);
         this.track(result.usage);
+        this.recorder?.assistant(result.text, result.toolCalls);
         if (result.text.trim()) lastText = result.text;
 
         if (result.stop === "refusal") {
@@ -102,6 +113,7 @@ export class Agent {
             if (failure) {
               verifyRounds++;
               this.provider.addUserText(failure);
+              this.recorder?.user(failure);
               continue;
             }
           }
@@ -111,13 +123,13 @@ export class Agent {
         // A tool call cut off at the output limit may parse as a valid but
         // truncated input, so none of this turn's calls run.
         if (result.stop === "max_tokens") {
-          this.provider.addToolResults(
-            result.toolCalls.map((c) => ({
-              id: c.id,
-              isError: true,
-              content: "Not run: your output hit the token limit mid-call. Split the work into smaller edits.",
-            })),
-          );
+          const cut = result.toolCalls.map((c) => ({
+            id: c.id,
+            isError: true,
+            content: "Not run: your output hit the token limit mid-call. Split the work into smaller edits.",
+          }));
+          this.provider.addToolResults(cut);
+          this.recorder?.toolResults(cut);
           continue;
         }
 
@@ -133,6 +145,7 @@ export class Agent {
         }
 
         this.provider.addToolResults(results);
+        this.recorder?.toolResults(results);
         if (signal.aborted) break;
         if (step === this.maxSteps - 1) this.ui.notice(`Stopped after ${this.maxSteps} steps.`);
       }
@@ -163,10 +176,10 @@ export class Agent {
     const results: ToolResult[] = new Array(calls.length);
     let i = 0;
     while (i < calls.length) {
-      const tool = toolByName(calls[i]!.name);
+      const tool = this.find(calls[i]!.name);
       if (tool?.kind === "read") {
         let j = i;
-        while (j < calls.length && toolByName(calls[j]!.name)?.kind === "read") j++;
+        while (j < calls.length && this.find(calls[j]!.name)?.kind === "read") j++;
         const batch = calls.slice(i, j);
         const out = await Promise.all(batch.map((c) => this.runOne(c, signal, changed)));
         out.forEach((r, k) => (results[i + k] = r));
@@ -181,8 +194,9 @@ export class Agent {
 
   private async runOne(call: ToolCall, signal: AbortSignal, changed: Set<string>): Promise<ToolResult> {
     if (signal.aborted) return { id: call.id, isError: true, content: "Cancelled by the user before running." };
-    const tool = toolByName(call.name);
-    if (!tool) return { id: call.id, isError: true, content: `Unknown tool "${call.name}".` };
+    const tool = this.find(call.name);
+    if (!tool)
+      return { id: call.id, isError: true, content: `Unknown tool "${call.name}". Available: ${this.toolNames.join(", ")}.` };
 
     // Inputs streamed eagerly aren't validated by the API, so validate here.
     const parsed = tool.schema.safeParse(call.input);
@@ -234,7 +248,7 @@ export class Agent {
         changed.add(path.resolve(this.root, (input as { path: string }).path));
       }
       if (tool.name === "bash") changed.add("(shell)");
-      return { id: call.id, content: output || "(no output)" };
+      return { id: call.id, content: this.cap(output || "(no output)") };
     } catch (err) {
       const msg =
         err instanceof ToolError || err instanceof PathError
@@ -254,7 +268,7 @@ export class Agent {
         const rel = path.relative(this.root, f);
         this.ui.toolStart("verify", `jac check ${rel}`);
         const r = await runShell(`jac check '${f.replace(/'/g, `'\\''`)}'`, this.root, 180_000, signal);
-        const out = formatShell(r, 180_000);
+        const out = formatJacResult(r, 180_000);
         const failed = r.code !== 0 || r.timedOut;
         this.ui.toolEnd("verify", out, failed);
         if (failed) failures.push(`$ jac check ${rel}\n${out}`);
@@ -275,6 +289,28 @@ export class Agent {
       "or explain why the failure is unrelated to your change:\n\n" +
       failures.join("\n\n")
     );
+  }
+
+  private find(name: string): Tool | undefined {
+    return this.tools.find((t) => t.name === name);
+  }
+
+  /** Keeps the head and tail of long results when a cap is set. */
+  private cap(text: string): string {
+    const max = this.maxResultChars;
+    if (!max || text.length <= max) return text;
+    const half = Math.floor(max / 2);
+    return `${text.slice(0, half)}\n… [${text.length - max} characters cut; use offset/limit or a narrower search] …\n${text.slice(-half)}`;
+  }
+
+  /** Changes the tools offered to the model, e.g. a smaller set for a small local model. */
+  setTools(tools: Tool[]): void {
+    this.tools = tools;
+    this.specs = tools.map(toSpec);
+  }
+
+  get toolNames(): string[] {
+    return this.tools.map((t) => t.name);
   }
 
   /** Swap the model provider while keeping tools, checkpoints and permissions. */

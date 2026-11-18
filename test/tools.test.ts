@@ -121,3 +121,17 @@ test("tool specs are clean JSON Schema", () => {
   assert.equal("$schema" in spec.inputSchema, false);
   assert.deepEqual(spec.inputSchema.required, ["path"]);
 });
+
+test("outline lists Jac, Python and TypeScript declarations", async () => {
+  const { outline } = await import("../src/tools/outline.js");
+  const ctx = setup();
+  fs.mkdirSync(path.join(ctx.root, "src"));
+  fs.writeFileSync(
+    path.join(ctx.root, "src/app.jac"),
+    'node Person {\n    has name: str;\n}\n\nwalker Greet {\n    can hello with Person entry {\n        report here.name;\n    }\n}\n\ndef add(a: int, b: int) -> int {\n    return a + b;\n}\n\ntest "adds" { assert add(1, 2) == 3; }\n',
+  );
+  fs.writeFileSync(path.join(ctx.root, "src/util.py"), "class A:\n    def go(self) -> int:\n        return 1\n");
+  const out = await outline.run({}, ctx);
+  assert.match(out, /src\/app\.jac\n {4}1 {2}node Person\n {4}5 {2}walker Greet\n {4}6 {4}can hello with Person entry\n {3}11 {2}def add\(a: int, b: int\) -> int\n {3}15 {2}test "adds"/);
+  assert.match(out, /src\/util\.py\n {4}1 {2}class A\n {4}2 {4}def go\(self\) -> int/);
+});

@@ -1,0 +1,2 @@
+anthropic>=2.10
+datasets>=3.0

@@ -12,6 +12,8 @@ export interface Config {
   verifyCommand?: string;
   autoJacCheck: boolean;
   ollamaHost?: string;
+  /** Compact prompt, core tools and short tool output for small models. Default: on for Ollama. */
+  lite?: boolean;
 }
 
 export const DEFAULT_MODELS = { anthropic: "claude-opus-5-5", ollama: "qwen3-coder" } as const;

@@ -2,19 +2,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
 import pc from "picocolors";
 import { Agent } from "./agent.js";
 import { DEFAULT_MODELS, EFFORTS, MODES, loadConfig, type Config } from "./config.js";
 import { estimateCost, knownModels } from "./cost.js";
 import { Permissions } from "./permissions.js";
+import { ALL_TOOLS, LITE_TOOLS } from "./tools/index.js";
 import { buildSystemPrompt, INIT_PROMPT, type PromptInfo } from "./prompt.js";
 import { resolveInRoot } from "./paths.js";
 import { AnthropicProvider, describeAnthropicError } from "./providers/anthropic.js";
 import { OllamaProvider } from "./providers/ollama.js";
 import { listSessions, loadSession, newSessionId, saveSession } from "./session.js";
-import { runShell, formatShell } from "./tools/shell.js";
+import { runShell, formatShell, formatJacResult, runJac, findJac, JAC_MISSING } from "./tools/shell.js";
 import { PrintUI, TerminalUI, colorDiff, renderTodos } from "./ui.js";
 import { LineReader } from "./lines.js";
+import { Recorder } from "./recorder.js";
+import { runEval, summarize } from "./eval.js";
 import type { Effort, PermissionMode, Provider } from "./types.js";
 
 const VERSION = "0.1.0";
@@ -37,9 +41,17 @@ ${pc.bold("Options")}
       --verify <command>   run this after the agent changes files, e.g. "npm test"
       --no-thinking        hide the model's reasoning summary
       --no-jac-check       don't auto-run \`jac check\` on changed .jac files
+      --lite / --no-lite   small-model mode: short prompt, core tools, short tool output (default: on for Ollama)
   -r, --resume [id]        resume the latest session here, or a given session id
   -C, --cwd <dir>          project root (default: current directory)
   -q, --quiet              with -p: print only the answer
+      --record <file>      save every request as a training trajectory (JSONL)
+
+${pc.bold("Jac benchmark")}
+  jaccode eval                      run the Jac eval suite with the current model
+  jaccode eval --reference          grade the reference solutions (checks the suite itself)
+  jaccode eval --only fizzbuzz,roman --record runs.jsonl --out results.json
+  jaccode eval --tasks data/agent_tasks --limit 40   run at most 40 tasks
   -v, --version
   -h, --help
 
@@ -57,6 +69,10 @@ const SLASH_HELP = `${pc.bold("Commands")}
   /diff                 show every change made this session
   /plan                 show the current checklist
   /verify [cmd|off]     set a command to run after each change (e.g. npm test)
+  /check [files]        run \`jac check\` directly (no model; defaults to changed .jac files)
+  /test [files]         run \`jac test\` directly
+  /run [file]           run \`jac run\` directly
+  /fix [files]          run \`jac check\` and have the agent fix any errors
   /cost                 token usage and estimated cost
   /init                 explore the project and write JAC.md (project memory)
   /remember <note>      add a note to JAC.md
@@ -82,9 +98,17 @@ interface Flags {
   verify?: string;
   "no-thinking"?: boolean;
   "no-jac-check"?: boolean;
+  lite?: boolean;
+  "no-lite"?: boolean;
   resume?: string | boolean;
   cwd?: string;
   quiet?: boolean;
+  record?: string;
+  reference?: boolean;
+  only?: string;
+  limit?: string;
+  tasks?: string;
+  out?: string;
   version?: boolean;
   help?: boolean;
 }
@@ -117,8 +141,16 @@ function parse(): { flags: Flags; positional: string[] } {
       verify: { type: "string" },
       "no-thinking": { type: "boolean" },
       "no-jac-check": { type: "boolean" },
+      lite: { type: "boolean" },
+      "no-lite": { type: "boolean" },
       cwd: { type: "string", short: "C" },
       quiet: { type: "boolean", short: "q" },
+      record: { type: "string" },
+      reference: { type: "boolean" },
+      only: { type: "string" },
+      limit: { type: "string" },
+      tasks: { type: "string" },
+      out: { type: "string" },
       version: { type: "boolean", short: "v" },
       help: { type: "boolean", short: "h" },
     },
@@ -211,9 +243,35 @@ async function main(): Promise<void> {
     verifyCommand: flags.verify,
     showThinking: flags["no-thinking"] ? false : undefined,
     autoJacCheck: flags["no-jac-check"] ? false : undefined,
+    lite: flags.lite ? true : flags["no-lite"] ? false : undefined,
   });
+  const liteFor = (provider: string) => cfg.lite ?? provider === "ollama";
+  const LITE_RESULT_CHARS = 6000;
 
-  const { prompt: system, info } = buildSystemPrompt(root);
+  if (positional[0] === "eval") {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const tasksDir = flags.tasks ? path.resolve(flags.tasks) : path.resolve(here, "..", "evals", "jac");
+    const recorder = flags.record ? new Recorder(flags.record) : undefined;
+    const results = await runEval({
+      tasksDir,
+      only: flags.only?.split(",").map((s) => s.trim()).filter(Boolean),
+      limit: flags.limit ? Number(flags.limit) : undefined,
+      reference: flags.reference,
+      makeProvider: () => makeProvider(cfg),
+      lite: liteFor(cfg.provider),
+      verbose: !flags.quiet,
+      recorder,
+    });
+    process.stdout.write(summarize(results) + "\n");
+    if (flags.out) {
+      fs.writeFileSync(flags.out, JSON.stringify({ model: flags.reference ? "reference" : `${cfg.provider}:${cfg.model}`, results }, null, 2));
+    }
+    if (flags.reference && results.some((r) => !r.passed)) process.exitCode = 1;
+    return;
+  }
+
+  const lite = liteFor(cfg.provider);
+  const { prompt: system, info } = buildSystemPrompt(root, { lite });
   const printMode = flags.print !== undefined;
   const ui = printMode ? new PrintUI(!!flags.quiet) : new TerminalUI();
   const agent = new Agent({
@@ -224,7 +282,15 @@ async function main(): Promise<void> {
     system,
     verifyCommand: cfg.verifyCommand,
     autoJacCheck: cfg.autoJacCheck,
+    recorder: flags.record ? new Recorder(flags.record) : undefined,
+    tools: lite ? LITE_TOOLS : ALL_TOOLS,
+    maxResultChars: lite ? LITE_RESULT_CHARS : undefined,
   });
+  const applyLite = (on: boolean) => {
+    agent.setTools(on ? LITE_TOOLS : ALL_TOOLS);
+    agent.maxResultChars = on ? LITE_RESULT_CHARS : undefined;
+    agent.system = buildSystemPrompt(root, { lite: on }).prompt;
+  };
 
   let sessionId = newSessionId();
   let title = "";
@@ -234,6 +300,7 @@ async function main(): Promise<void> {
     if (!s) throw new Error("No saved session found to resume.");
     if (s.provider !== agent.provider.id) {
       agent.setProvider(makeProvider({ ...cfg, provider: s.provider as Config["provider"], model: s.model }));
+      applyLite(liteFor(s.provider));
     }
     agent.provider.model = s.model;
     agent.provider.importHistory(s.history);
@@ -264,7 +331,9 @@ async function main(): Promise<void> {
   const runRequest = async (text: string, controller: AbortController) => {
     if (!title) title = text.split("\n")[0]!.slice(0, 80);
     try {
-      return await agent.run(text, controller.signal);
+      const answer = await agent.run(text, controller.signal);
+      agent.recorder?.commit({ source: "session", model: `${agent.provider.id}:${agent.provider.model}` });
+      return answer;
     } catch (err) {
       if (controller.signal.aborted) {
         ui.notice("Cancelled.");
@@ -297,7 +366,7 @@ async function main(): Promise<void> {
   const tui = ui as TerminalUI;
   const lines = new LineReader(process.stdin, process.stdout, process.stdin.isTTY ?? false);
   tui.lines = lines;
-  console.log(banner(cfg, info, root));
+  console.log(banner(cfg, info, root) + (lite ? pc.dim("\n  small-model mode: short prompt, core tools (--no-lite to turn off)") : ""));
   if (flags.resume) console.log(pc.dim(`  resumed session ${sessionId}: ${title}`));
   console.log();
 
@@ -399,7 +468,8 @@ async function main(): Promise<void> {
         if (nextProvider !== agent.provider.id) {
           const p = makeProvider({ ...cfg, provider: nextProvider, model: nextModel, effort: agent.provider.effort });
           agent.setProvider(p);
-          console.log(pc.dim(`  switched to ${nextProvider}:${nextModel} (new conversation; files and checkpoints kept)`));
+          applyLite(liteFor(nextProvider));
+          console.log(pc.dim(`  switched to ${nextProvider}:${nextModel} (new conversation; files and checkpoints kept${liteFor(nextProvider) ? "; small-model mode" : ""})`));
         } else {
           agent.provider.model = nextModel;
           console.log(pc.dim(`  model: ${nextModel}`));
@@ -439,6 +509,32 @@ async function main(): Promise<void> {
         if (!arg) return void console.log(`  verify: ${agent.verifyCommand ?? "off"}`);
         agent.verifyCommand = arg === "off" ? undefined : arg;
         return void console.log(pc.dim(`  verify: ${agent.verifyCommand ?? "off"}`));
+      case "check":
+      case "test":
+      case "run":
+      case "fix": {
+        // Runs the Jac compiler directly: instant, and costs no model tokens.
+        if (!findJac()) return void console.log(pc.red(`  ${JAC_MISSING}`));
+        const targets = arg
+          ? arg.split(/\s+/)
+          : (() => {
+              const changed = agent.checkpoints.changedFiles().filter((f) => f.endsWith(".jac"));
+              return changed.length ? changed.map((f) => path.relative(root, f)) : ["."];
+            })();
+        const action = cmd === "fix" ? "check" : cmd;
+        const failures: string[] = [];
+        for (const t of targets) {
+          console.log(pc.cyan(`● jac ${action} ${t}`));
+          const r = await runJac([action, t], root, new AbortController().signal, 600_000);
+          const out = formatJacResult(r, 600_000);
+          const ok = r.code === 0 && !r.timedOut;
+          console.log(ok ? pc.dim(out) : pc.red(out));
+          if (!ok) failures.push(`$ jac ${action} ${t}\n${out}`);
+        }
+        if (cmd !== "fix") return;
+        if (!failures.length) return void console.log(pc.green("  no errors to fix"));
+        return `Fix these Jac errors, then run \`jac check\` again to confirm:\n\n${failures.join("\n\n")}`;
+      }
       case "cost":
         return void console.log(costReport(agent));
       case "init":
@@ -448,13 +544,13 @@ async function main(): Promise<void> {
         const file = path.join(root, "JAC.md");
         const prefix = fs.existsSync(file) ? (fs.readFileSync(file, "utf8").endsWith("\n") ? "" : "\n") : "# Project notes\n\n";
         fs.appendFileSync(file, `${prefix}- ${arg}\n`);
-        agent.system = buildSystemPrompt(root).prompt;
+        agent.system = buildSystemPrompt(root, { lite: liteFor(agent.provider.id) }).prompt;
         return void console.log(pc.dim("  saved to JAC.md"));
       }
       case "clear":
         persist();
         agent.reset();
-        agent.system = buildSystemPrompt(root).prompt;
+        agent.system = buildSystemPrompt(root, { lite: liteFor(agent.provider.id) }).prompt;
         sessionId = newSessionId();
         title = "";
         created = new Date().toISOString();
@@ -471,6 +567,7 @@ async function main(): Promise<void> {
         persist();
         if (s.provider !== agent.provider.id) {
           agent.setProvider(makeProvider({ ...cfg, provider: s.provider as Config["provider"], model: s.model }));
+      applyLite(liteFor(s.provider));
         }
         agent.reset();
         agent.provider.model = s.model;

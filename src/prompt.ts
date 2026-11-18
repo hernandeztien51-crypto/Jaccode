@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { findJac } from "./tools/shell.js";
+import { JAC_CHEATSHEET, JAC_INSTALL, JAC_TARGET_VERSION } from "./jac/cheatsheet.js";
 
 /** Files read as project memory, in order. JAC.md is ours; the others are common conventions. */
 export const MEMORY_FILES = ["JAC.md", "AGENTS.md", "CLAUDE.md"];
@@ -11,27 +12,7 @@ export function globalDir(): string {
   return process.env.JACCODE_HOME ?? path.join(os.homedir(), ".jaccode");
 }
 
-const JAC_PRIMER = `
-# Jac language notes
-Jac (from Jaseci) is a Python superset with braces and semicolons that compiles to Python bytecode. Models
-often write Python or JSX by mistake, so follow the project's existing .jac files first and verify every
-change with the \`jac\` tool (\`check\`, then \`run\`/\`test\`). Syntax has changed between releases; when the
-compiler disagrees with these notes, the compiler wins, and \`jac --help\` / \`jac guide --help\` (if present)
-show what the installed version supports.
 
-Common shapes (recent releases):
-- Statements end with \`;\`, blocks use \`{ }\`. Comments: \`# line\`, \`#* block *#\`.
-- Entry point: \`with entry { print("hello"); }\`
-- Functions: \`def add(a: int, b: int) -> int { return a + b; }\`
-- Imports: \`import math;\`  \`import from os { path, getcwd }\`
-- Objects: \`obj Point { has x: float, y: float = 0.0; def norm() -> float { return (self.x ** 2 + self.y ** 2) ** 0.5; } }\`
-- Object-spatial programming: \`node\`, \`edge\` and \`walker\` archetypes. Connect with \`a ++> b;\`, traverse
-  with \`[-->]\`, move a walker with \`visit [-->];\`, start one with \`root spawn MyWalker();\`. Inside a
-  walker, abilities look like \`can act with MyNode entry { ... }\`; \`here\` is the current node,
-  \`report x;\` returns data and \`disengage;\` stops the walk.
-- LLM-backed functions (byLLM): \`def summarize(text: str) -> str by llm();\` with a model defined via the
-  byllm package. Check which package and version the project imports before writing this.
-`.trim();
 
 function gitInfo(root: string): string | undefined {
   const r = spawnSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" });
@@ -101,7 +82,20 @@ export interface PromptInfo {
  * Builds the system prompt. It stays byte-stable for the whole session (no
  * timestamps finer than the date), so prompt caching keeps working.
  */
-export function buildSystemPrompt(root: string): { prompt: string; info: PromptInfo } {
+/** Short working rules for small local models: fewer words, one action at a time. */
+const LITE_RULES = `# How to work
+- Look before you change: outline or grep to find code, read_file before editing a file.
+- Change code with edit_file (exact text from the file) or write_file for new files.
+- After changing Jac code, run the jac tool with action "check" and fix every error it reports.
+- If a tool fails, read the error and try something different. Never repeat a failed call unchanged.
+- When done, reply with one or two sentences: what changed and whether the check passed.`;
+
+export interface PromptOptions {
+  /** Compact prompt for small local models. */
+  lite?: boolean;
+}
+
+export function buildSystemPrompt(root: string, opts: PromptOptions = {}): { prompt: string; info: PromptInfo } {
   const jacFiles = countJacFiles(root);
   const version = jacVersion();
   const memory = loadMemory(root);
@@ -111,8 +105,11 @@ export function buildSystemPrompt(root: string): { prompt: string; info: PromptI
     `You are jaccode, a coding agent working in the user's terminal on the project at ${root}. You read, ` +
       `write and run code through your tools. You are an expert in Jac and Python, and competent in every ` +
       `mainstream language.`,
-    `# How to work
-- Understand before changing: explore with list_dir, glob, grep and read_file. Read every file before you edit it.
+    opts.lite
+      ? LITE_RULES
+      : `# How to work
+- Understand before changing: get the shape of the code with outline, find things with grep and glob, then
+  read_file the parts you need. Read every file before you edit it.
 - For work with three or more steps, keep a checklist with todo_write and update it as you go.
 - Make the smallest change that fully solves the task, in the style of the surrounding code. Prefer edit_file
   or multi_edit over rewriting whole files.
@@ -128,16 +125,18 @@ export function buildSystemPrompt(root: string): { prompt: string; info: PromptI
     `# Environment
 - Platform: ${process.platform} (${os.release()}), shell: bash, date: ${new Date().toISOString().slice(0, 10)}
 - Project root: ${root}${git ? `\n- ${git}` : ""}
-- Jac toolchain: ${version ?? "not installed (suggest `pip install jaclang` if the user needs to run Jac)"}
+- Jac toolchain: ${version ?? `not installed; if the user needs to run Jac, suggest: ${JAC_INSTALL}`}${version && !version.includes(JAC_TARGET_VERSION) ? ` (notes below target ${JAC_TARGET_VERSION}; follow the installed compiler where they differ)` : ""}
 - .jac files in project: ${jacFiles}
 - Top level: ${topLevel(root)}`,
-    JAC_PRIMER,
+    JAC_CHEATSHEET,
   ];
 
   if (memory.length) {
     sections.push(
       "# Project memory\nInstructions and notes the user keeps for this project. Follow them.\n\n" +
-        memory.map((m) => `<memory file="${m.file}">\n${m.text.trim()}\n</memory>`).join("\n\n"),
+        memory
+          .map((m) => `<memory file="${m.file}">\n${(opts.lite ? m.text.slice(0, 4000) : m.text).trim()}\n</memory>`)
+          .join("\n\n"),
     );
   }
 

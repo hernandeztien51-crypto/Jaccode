@@ -45,6 +45,7 @@ export function isReadOnlyCommand(command: string): boolean {
     const words = seg.split(/\s+/);
     const cmd = words[0]!;
     if (cmd === "git") return SAFE_GIT.has(words[1] ?? "");
+    if (cmd === "jac") return ["check", "guide", "--version", "--help"].includes(words[1] ?? "");
     if (cmd === "find") return !words.some((w) => w === "-delete" || w === "-exec" || w === "-execdir");
     if (SAFE_VERSION_TOOLS.has(cmd)) return words.length === 2 && /^(--version|-v|-V|version)$/.test(words[1]!);
     return SAFE_COMMANDS.has(cmd);

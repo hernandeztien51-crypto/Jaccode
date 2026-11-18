@@ -2,6 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { z } from "zod";
 import { resolveInRoot } from "../paths.js";
 import { defineTool, ToolError, truncateMiddle } from "./tool.js";
+import { JAC_INSTALL } from "../jac/cheatsheet.js";
+import { parseDiagnostics, summarizeDiagnostics } from "../jac/diagnostics.js";
 
 export interface ShellResult {
   stdout: string;
@@ -91,28 +93,47 @@ export function findJac(): string | null {
   return jacPath;
 }
 
+/** Runs `jac` with arguments, without a shell in between. */
+export async function runJac(args: string[], cwd: string, signal: AbortSignal, timeoutMs = 180_000): Promise<ShellResult> {
+  const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
+  return runShell(`jac ${quoted}`, cwd, timeoutMs, signal);
+}
+
+/**
+ * Formats a jac run for the model: a compact diagnostic summary with fix hints first, then the tail of the
+ * raw output for context. Falls back to the raw output when nothing parses.
+ */
+export function formatJacResult(r: ShellResult, timeoutMs: number): string {
+  const raw = formatShell(r, timeoutMs);
+  const diags = parseDiagnostics(r.stdout + "\n" + r.stderr);
+  if (diags.length === 0) return raw;
+  const tail = raw.length > 2500 ? "…" + raw.slice(-2500) : raw;
+  return `${summarizeDiagnostics(diags)}\n\nRaw output:\n${tail}`;
+}
+
+export const JAC_MISSING =
+  `The \`jac\` CLI is not installed. Ask the user to install it with: ${JAC_INSTALL} ` +
+  "(the pip package is outdated). Until then, review the Jac code by reading it carefully.";
+
 export const jac = defineTool({
   name: "jac",
   description:
-    "Run the Jac compiler/toolchain on a file: `check` type-checks and reports errors, `run` executes it, " +
-    "`test` runs its tests, `format` reformats it in place. Always `check` Jac code you wrote before saying it works.",
+    "Run the Jac toolchain. `check` type-checks a file and reports errors, `run` executes it, `test` runs its " +
+    "test blocks, `format` reformats it in place, `guide` prints an official Jac guide (target = guide name, " +
+    "e.g. jac-types, jac-walker-patterns; target \"\" lists them). Always `check` Jac code you wrote before saying it works.",
   kind: "exec",
   schema: z.object({
-    action: z.enum(["check", "run", "test", "format"]),
-    path: z.string().describe("A .jac file, relative to the project root"),
+    action: z.enum(["check", "run", "test", "format", "guide"]),
+    target: z.string().describe("A .jac file relative to the project root, or a guide name for `guide`"),
     args: z.array(z.string()).optional().describe("Extra arguments passed to the jac command"),
   }),
-  summary: (i) => `jac ${i.action} ${i.path}`,
-  command: (i) => `jac ${i.action} ${i.path}${i.args?.length ? " " + i.args.join(" ") : ""}`,
+  summary: (i) => `jac ${i.action} ${i.target}`.trim(),
+  command: (i) => `jac ${i.action} ${i.target}${i.args?.length ? " " + i.args.join(" ") : ""}`.trim(),
   async run(i, ctx) {
-    if (!findJac())
-      throw new ToolError(
-        "The `jac` CLI is not installed. Ask the user to run `pip install jaclang` (or `pip install jaseci`), " +
-          "then try again. Until then, review the Jac code by reading it carefully.",
-      );
-    const file = resolveInRoot(ctx.root, i.path);
-    const quoted = [i.action, file, ...(i.args ?? [])].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
-    const r = await runShell(`jac ${quoted}`, ctx.root, 180_000, ctx.signal);
-    return formatShell(r, 180_000);
+    if (!findJac()) throw new ToolError(JAC_MISSING);
+    const target = i.action === "guide" ? i.target.trim() : resolveInRoot(ctx.root, i.target);
+    const args = [i.action, ...(target ? [target] : []), ...(i.args ?? [])];
+    const r = await runJac(args, ctx.root, ctx.signal);
+    return i.action === "guide" || i.action === "format" ? formatShell(r, 180_000) : formatJacResult(r, 180_000);
   },
 });

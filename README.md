@@ -7,7 +7,7 @@ fully offline on local models through Ollama.
 ```
 ◆ jaccode v0.1.0  claude-opus-5-5 · effort high · auto-edit
   ~/projects/graph-app
-  14 .jac files · jac 0.8.x · memory: JAC.md
+  14 .jac files · jac 0.40.0 · memory: JAC.md
 
 › add a walker that counts nodes reachable from root, and a test for it
 ✻ I'll look at the existing walkers first…
@@ -31,7 +31,11 @@ npm install && npm run build
 npm link        # puts `jaccode` and `jc` on your PATH
 ```
 
-For Jac work, install the Jac toolchain too: `pip install jaclang`.
+For Jac work, install the Jac toolchain too (the `jaclang` pip package is outdated; Jac now ships as one binary):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jaseci-labs/jaseci/main/scripts/install.sh | bash
+```
 
 ## Credentials
 
@@ -63,8 +67,10 @@ jaccode --yolo                           # no permission prompts (dangerous comm
 | `--verify <cmd>` | Command to run after the agent changes files |
 | `--no-thinking` | Hide the model's reasoning summary |
 | `--no-jac-check` | Don't run `jac check` automatically |
+| `--lite`, `--no-lite` | Small-model mode: short prompt, core tools, short tool output (default: on for Ollama) |
 | `-r, --resume [id]` | Resume the latest session here, or a given id |
 | `-C, --cwd <dir>` | Project root |
+| `--record <file>` | Save every request as a training trajectory (JSONL, chat-messages format) |
 
 ### In a session
 
@@ -77,6 +83,8 @@ jaccode --yolo                           # no permission prompts (dangerous comm
 | `/diff` | Unified diff of everything changed this session |
 | `/plan` | The agent's current checklist |
 | `/verify [cmd\|off]` | Set the check that runs after changes |
+| `/check [files]`, `/test [files]`, `/run [file]` | Run the Jac compiler directly: instant, no model tokens. Defaults to the `.jac` files changed this session |
+| `/fix [files]` | Run `jac check` and hand any errors to the agent |
 | `/cost` | Tokens and estimated cost, per model |
 | `/init` | Have the agent explore the project and write `JAC.md` |
 | `/remember <note>` | Append a note to `JAC.md` |
@@ -93,10 +101,29 @@ verify command (`--verify "pytest -q"`), that runs too. Failures go back to the 
 hands control back, for up to two rounds. The system prompt also tells it never to claim something works
 without running it.
 
-**Jac-aware.** It knows the project's Jac toolchain version, counts the `.jac` files, carries a short
-primer on the syntax models usually get wrong (it tends to come out as Python or JSX), and has a `jac` tool
-for `check`, `run`, `test` and `format`. Where the primer and the compiler disagree, the agent is told
-to go with the compiler.
+**Jac-aware.** It knows the project's Jac toolchain version and counts the `.jac` files. It carries a compact
+cheat sheet for Jac 0.40, condensed from the official guides that ship with `jac`, covering the mistakes models
+make most: Python- or JS-style syntax, brace imports with `;`, `root()`, `&&`, non-exhaustive enum matches.
+Its `jac` tool runs `check`, `run`, `test`, `format` and `guide`, so the agent can read the official guides
+itself. `jac check` and `jac guide` count as read-only, so they never prompt. Where the cheat sheet and the
+compiler disagree, the agent is told to go with the compiler.
+
+**Reads compiler errors properly.** `jac check` output is parsed into one line per problem: file, line, error
+code, a fix hint for the common codes, and the guide the compiler points to. Duplicates are dropped, so the model
+gets short, focused feedback instead of pages of raw output.
+
+**Code outline.** The `outline` tool lists the declarations in a file or folder with line numbers: functions,
+objects, nodes, edges, walkers, abilities, tests, plus Python and TypeScript classes and functions. The agent can
+see a project's structure without reading whole files.
+
+**Small-model mode.** With Ollama models, jaccode switches to small-model mode automatically:
+- a shorter prompt;
+- seven core tools instead of eleven;
+- tool output capped at 6,000 characters;
+- tools that weren't offered are refused.
+
+A small local model has less to get wrong and less context to fill. Use `--lite` to turn it on for any model, or
+`--no-lite` to turn it off.
 
 **Safe edits.**
 - A file can't be edited until it has been read. If it changed on disk since that read, the edit is
@@ -122,6 +149,40 @@ server-side refusal fallback is on. Sessions are saved to `~/.jaccode/sessions` 
 
 **Project memory.** `JAC.md` (plus `AGENTS.md` / `CLAUDE.md` if present, and a personal
 `~/.jaccode/JAC.md`) is loaded into every session. `/init` writes one for you.
+
+## Jac benchmark
+
+`evals/jac` holds 25 Jac tasks graded by the compiler:
+- writing functions, objects and enums
+- nodes, typed edges and walkers
+- fixing Python-style syntax and logic bugs
+- adding a feature
+- porting Python
+- importing across files
+- `.impl.jac` implementation files
+- `by llm()` functions, tested with a mock model so they run offline
+
+The summary also lists the compiler error codes the model hit most, which shows what extra training data it needs.
+
+Each task gets a fresh folder. The agent works on it, then hidden tests are added and run with `jac test`.
+
+```bash
+jaccode eval                                   # current model; prints pass@1, compile rate, foreign-syntax rate
+jaccode eval -m ollama:hf.co/you/jac-2b-GGUF:Q5_K_M --out results.json
+jaccode eval --reference                       # grade the reference solutions (validates the suite)
+jaccode eval --only fizzbuzz,sum_tree --record runs.jsonl
+```
+
+## Training your own model
+
+`training/` builds a small Jac-specialised model that runs locally with no API key:
+1. Compiler-verified training data.
+2. A LoRA fine-tune of Qwen3.5-2B on a free Colab GPU.
+3. Optional reinforcement learning with the Jac compiler as the reward.
+4. A ~1.4 GB GGUF file you run through Ollama.
+
+The quickest start is `training/jaccode_pipeline.ipynb` in Google Colab. It runs the whole pipeline, from installing
+Jac to a before/after score. Details are in `training/README.md`, and the research behind it is in `reports/`.
 
 ## Configuration
 
@@ -149,9 +210,17 @@ npm test                     # unit + agent-loop tests (no network)
 npm run typecheck
 ```
 
-Layout: `src/agent.ts` (the loop, permissions, verification), `src/providers/` (Anthropic, Ollama, a
-scripted mock for tests), `src/tools/` (file, search, shell and Jac tools; Zod schemas generate the JSON
-Schema the model sees), `src/checkpoints.ts` (undo/diff), `src/cli.ts` (REPL and flags).
+Layout:
+- `src/agent.ts`: the loop, permissions and verification.
+- `src/providers/`: Anthropic, Ollama, and a scripted mock for tests.
+- `src/tools/`: the file, search, shell and Jac tools. Zod schemas generate the JSON Schema the model sees.
+- `src/jac/cheatsheet.ts`: the Jac notes in the prompt.
+- `src/eval.ts`: the benchmark runner.
+- `src/recorder.ts`: training trajectories.
+- `src/checkpoints.ts`: undo and diff.
+- `src/cli.ts`: the REPL and flags.
+- `evals/jac/`: the benchmark tasks.
+- `training/`: the model pipeline.
 
 ## License
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { editFile, listDir, multiEdit, readFile, writeFile } from "./files.js";
 import { glob, grep } from "./search.js";
 import { bash, jac } from "./shell.js";
+import { outline } from "./outline.js";
 import { defineTool, type Tool } from "./tool.js";
 
 export const todoWrite = defineTool({
@@ -25,7 +26,10 @@ export const todoWrite = defineTool({
   },
 });
 
-export const ALL_TOOLS: Tool[] = [readFile, writeFile, editFile, multiEdit, listDir, glob, grep, bash, jac, todoWrite];
+export const ALL_TOOLS: Tool[] = [readFile, writeFile, editFile, multiEdit, listDir, glob, grep, outline, bash, jac, todoWrite];
+
+/** Core tools for small local models: fewer choices, simpler arguments. */
+export const LITE_TOOLS: Tool[] = [readFile, writeFile, editFile, grep, outline, bash, jac];
 
 export function toolByName(name: string): Tool | undefined {
   return ALL_TOOLS.find((t) => t.name === name);

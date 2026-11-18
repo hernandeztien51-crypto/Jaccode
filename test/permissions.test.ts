@@ -7,6 +7,9 @@ test("read-only commands are recognised, including pipelines", () => {
   assert.ok(isReadOnlyCommand("git status && git diff --stat"));
   assert.ok(isReadOnlyCommand("grep -r foo src | head -20"));
   assert.ok(isReadOnlyCommand("jac --version"));
+  assert.ok(isReadOnlyCommand("jac check src/main.jac"));
+  assert.ok(isReadOnlyCommand("jac guide jac-types"));
+  assert.ok(!isReadOnlyCommand("jac run main.jac"));
   assert.ok(!isReadOnlyCommand("ls > out.txt"));
   assert.ok(!isReadOnlyCommand("cat $(which rm)"));
   assert.ok(!isReadOnlyCommand("git commit -m x"));

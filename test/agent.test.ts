@@ -124,3 +124,20 @@ test("refusals stop the turn with a notice", async () => {
   await agent.run("go", signal());
   assert.ok(log.some((l) => l.includes("declined this request: policy")));
 });
+
+test("small-model mode refuses tools it wasn't offered and caps long results", async () => {
+  const { LITE_TOOLS } = await import("../src/tools/index.js");
+  const { root, provider, agent } = harness([
+    { toolCalls: [{ id: "1", name: "multi_edit", input: { path: "a.txt", edits: [] } }] },
+    { toolCalls: [{ id: "2", name: "read_file", input: { path: "big.txt" } }] },
+    { text: "ok" },
+  ]);
+  fs.writeFileSync(path.join(root, "big.txt"), "x".repeat(20000));
+  agent.setTools(LITE_TOOLS);
+  agent.maxResultChars = 1000;
+  await agent.run("go", signal());
+  const [first, second] = provider.received.toolResults;
+  assert.match(first![0]!.content, /Unknown tool "multi_edit"\. Available: read_file/);
+  assert.ok(second![0]!.content.length < 1200);
+  assert.match(second![0]!.content, /characters cut/);
+});

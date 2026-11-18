@@ -15,7 +15,7 @@ function setup(): ToolContext {
   return { root, checkpoints: new Checkpoints(), readFiles: new Map(), todos: [], signal: new AbortController().signal };
 }
 
-test("paths outside the root are rejected", () => {
+test("paths outside the root are rejected", { skip: process.platform === "win32" && "symlinks need admin on Windows" }, () => {
   const ctx = setup();
   assert.throws(() => resolveInRoot(ctx.root, "../etc/passwd"), /outside the project root/);
   assert.throws(() => resolveInRoot(ctx.root, "/etc/passwd"), /outside the project root/);

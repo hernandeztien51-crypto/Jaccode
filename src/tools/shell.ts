@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { defaultShell, isWindows, killTree, which } from "../platform.js";
 import { z } from "zod";
 import { resolveInRoot } from "../paths.js";
 import { defineTool, ToolError, truncateMiddle } from "./tool.js";
@@ -12,44 +13,56 @@ export interface ShellResult {
   timedOut: boolean;
 }
 
-/** Runs a shell command with a timeout; killed if the turn is cancelled. */
-export function runShell(command: string, cwd: string, timeoutMs: number, signal: AbortSignal): Promise<ShellResult> {
+/** Runs a program with a timeout; the whole process tree is killed on timeout or cancel. */
+export function runProcess(file: string, args: string[], cwd: string, timeoutMs: number, signal: AbortSignal): Promise<ShellResult> {
   return new Promise((resolve) => {
-    const child = spawn("bash", ["-c", command], {
-      cwd,
-      env: { ...process.env, CI: process.env.CI ?? "1", GIT_PAGER: "cat", PAGER: "cat" },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    });
+    let child;
+    try {
+      child = spawn(file, args, {
+        cwd,
+        env: { ...process.env, CI: process.env.CI ?? "1", GIT_PAGER: "cat", PAGER: "cat" },
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: !isWindows,
+        windowsHide: true,
+      });
+    } catch (err) {
+      resolve({ stdout: "", stderr: (err as Error).message, code: 127, timedOut: false });
+      return;
+    }
     let stdout = "";
     let stderr = "";
     let timedOut = false;
     const cap = 4 * 1024 * 1024;
-    child.stdout.on("data", (d) => {
+    child.stdout!.on("data", (d) => {
       if (stdout.length < cap) stdout += d;
     });
-    child.stderr.on("data", (d) => {
+    child.stderr!.on("data", (d) => {
       if (stderr.length < cap) stderr += d;
     });
-    const kill = () => {
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
-    };
+    const kill = () => killTree(child);
     const timer = setTimeout(() => {
       timedOut = true;
       kill();
     }, timeoutMs);
     const onAbort = () => kill();
     signal.addEventListener("abort", onAbort, { once: true });
-    child.on("close", (code) => {
+    const done = (code: number | null) => {
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
       resolve({ stdout, stderr, code, timedOut });
+    };
+    child.on("error", (err) => {
+      stderr += err.message;
+      done(127);
     });
+    child.on("close", done);
   });
+}
+
+/** Runs a command string in the platform's shell (see defaultShell). */
+export function runShell(command: string, cwd: string, timeoutMs: number, signal: AbortSignal): Promise<ShellResult> {
+  const sh = defaultShell();
+  return runProcess(sh.file, sh.args(command), cwd, timeoutMs, signal);
 }
 
 export function formatShell(r: ShellResult, timeoutMs: number): string {
@@ -64,7 +77,7 @@ export function formatShell(r: ShellResult, timeoutMs: number): string {
 export const bash = defineTool({
   name: "bash",
   description:
-    "Run a shell command in the project root (bash -c). Use it for builds, tests, git, package managers and " +
+    `Run a shell command in the project root (${defaultShell().name}). Use it for builds, tests, git, package managers and ` +
     "the `jac` CLI. Commands are non-interactive; output is capped and long output keeps its head and tail. " +
     "Don't use it to read or edit files: use the file tools.",
   kind: "exec",
@@ -87,16 +100,14 @@ export const bash = defineTool({
 let jacPath: string | null | undefined;
 export function findJac(): string | null {
   if (jacPath === undefined) {
-    const r = spawnSync("bash", ["-c", "command -v jac"], { encoding: "utf8" });
-    jacPath = r.status === 0 ? r.stdout.trim() : null;
+    jacPath = which("jac");
   }
   return jacPath;
 }
 
-/** Runs `jac` with arguments, without a shell in between. */
+/** Runs `jac` directly with arguments: no shell, so no quoting differences between platforms. */
 export async function runJac(args: string[], cwd: string, signal: AbortSignal, timeoutMs = 180_000): Promise<ShellResult> {
-  const quoted = args.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
-  return runShell(`jac ${quoted}`, cwd, timeoutMs, signal);
+  return runProcess(findJac() ?? "jac", args, cwd, timeoutMs, signal);
 }
 
 /**

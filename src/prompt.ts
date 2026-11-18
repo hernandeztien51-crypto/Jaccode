@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { findJac } from "./tools/shell.js";
+import { defaultShell, platformLabel } from "./platform.js";
 import { JAC_CHEATSHEET, JAC_INSTALL, JAC_TARGET_VERSION } from "./jac/cheatsheet.js";
 
 /** Files read as project memory, in order. JAC.md is ours; the others are common conventions. */
@@ -24,7 +25,7 @@ function gitInfo(root: string): string | undefined {
 
 function jacVersion(): string | undefined {
   if (!findJac()) return undefined;
-  const r = spawnSync("jac", ["--version"], { encoding: "utf8", timeout: 10_000 });
+  const r = spawnSync(findJac()!, ["--version"], { encoding: "utf8", timeout: 10_000 });
   return (r.stdout || r.stderr).trim().split("\n")[0] || "installed";
 }
 
@@ -123,7 +124,7 @@ export function buildSystemPrompt(root: string, opts: PromptOptions = {}): { pro
 - Finish with a short summary: what changed (files), how you verified it, and anything left undone.
   Keep replies concise; the user reads them in a terminal.`,
     `# Environment
-- Platform: ${process.platform} (${os.release()}), shell: bash, date: ${new Date().toISOString().slice(0, 10)}
+- Platform: ${platformLabel()}, shell: ${defaultShell().name}, date: ${new Date().toISOString().slice(0, 10)}
 - Project root: ${root}${git ? `\n- ${git}` : ""}
 - Jac toolchain: ${version ?? `not installed; if the user needs to run Jac, suggest: ${JAC_INSTALL}`}${version && !version.includes(JAC_TARGET_VERSION) ? ` (notes below target ${JAC_TARGET_VERSION}; follow the installed compiler where they differ)` : ""}
 - .jac files in project: ${jacFiles}

@@ -11,6 +11,9 @@ const SAFE_COMMANDS = new Set([
   "sort", "uniq", "cut", "diff", "basename", "dirname", "realpath", "true",
 ]);
 
+/** Read-only Windows commands; PowerShell names are case-insensitive. */
+const SAFE_WINDOWS = new Set(["dir", "type", "where", "get-childitem", "get-content", "select-string", "get-location", "get-command", "findstr"]);
+
 const SAFE_GIT = new Set(["status", "diff", "log", "show", "branch", "remote", "blame", "ls-files", "rev-parse"]);
 
 const SAFE_VERSION_TOOLS = new Set(["node", "npm", "python", "python3", "pip", "jac", "tsc", "cargo", "go"]);
@@ -30,6 +33,13 @@ const DANGEROUS: { re: RegExp; why: string }[] = [
   { re: /:\(\)\s*\{\s*:\|:&\s*\};:/, why: "fork bomb" },
   { re: />\s*\/dev\/sd[a-z]/, why: "overwrites a disk device" },
   { re: /\bnpm\s+publish\b|\bgit\s+push\b/, why: "publishes outside this machine" },
+  // Windows (PowerShell / cmd)
+  { re: /\bRemove-Item\b[^|;]*-Recurse/i, why: "recursive delete" },
+  { re: /\b(rd|rmdir)\s+\/s\b|\bdel\s+[^|;]*\/[sq]\b/i, why: "recursive or silent delete" },
+  { re: /\bformat(\.com)?\s+[a-z]:/i, why: "formats a drive" },
+  { re: /\b(diskpart|bcdedit)\b|\breg(\.exe)?\s+delete\b/i, why: "changes disks or the registry" },
+  { re: /\b(Stop|Restart)-Computer\b/i, why: "stops the machine" },
+  { re: /\b(iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|]*\|\s*(iex|Invoke-Expression)\b/i, why: "runs a downloaded script" },
 ];
 
 export function dangerReason(command: string): string | undefined {
@@ -48,7 +58,7 @@ export function isReadOnlyCommand(command: string): boolean {
     if (cmd === "jac") return ["check", "guide", "--version", "--help"].includes(words[1] ?? "");
     if (cmd === "find") return !words.some((w) => w === "-delete" || w === "-exec" || w === "-execdir");
     if (SAFE_VERSION_TOOLS.has(cmd)) return words.length === 2 && /^(--version|-v|-V|version)$/.test(words[1]!);
-    return SAFE_COMMANDS.has(cmd);
+    return SAFE_COMMANDS.has(cmd) || SAFE_WINDOWS.has(cmd.toLowerCase());
   });
 }
 

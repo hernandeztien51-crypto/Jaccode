@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Checkpoints } from "./checkpoints.js";
 import { Permissions, dangerReason } from "./permissions.js";
-import { runShell, findJac, formatShell, formatJacResult } from "./tools/shell.js";
+import { runShell, runJac, findJac, formatShell, formatJacResult } from "./tools/shell.js";
 import { ALL_TOOLS } from "./tools/index.js";
 import { toSpec, ToolError, type Todo, type Tool, type ToolContext } from "./tools/tool.js";
 import { PathError } from "./paths.js";
@@ -267,7 +267,7 @@ export class Agent {
       for (const f of jacFiles) {
         const rel = path.relative(this.root, f);
         this.ui.toolStart("verify", `jac check ${rel}`);
-        const r = await runShell(`jac check '${f.replace(/'/g, `'\\''`)}'`, this.root, 180_000, signal);
+        const r = await runJac(["check", f], this.root, signal);
         const out = formatJacResult(r, 180_000);
         const failed = r.code !== 0 || r.timedOut;
         this.ui.toolEnd("verify", out, failed);

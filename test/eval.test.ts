@@ -51,7 +51,7 @@ esac
   return bin;
 }
 
-test("runner grades agent output and records verdicts", async () => {
+test("runner grades agent output and records verdicts", { skip: process.platform === "win32" && "uses a bash stand-in for jac" }, async () => {
   fakeJac();
   const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rec-")), "runs.jsonl");
   const recorder = new Recorder(out);
@@ -87,7 +87,7 @@ test("runner grades agent output and records verdicts", async () => {
   assert.ok(lines[0].tools.some((t: { function: { name: string } }) => t.function.name === "jac"));
 });
 
-test("reference mode passes with a working compiler", async () => {
+test("reference mode passes with a working compiler", { skip: process.platform === "win32" && "uses a bash stand-in for jac" }, async () => {
   fakeJac();
   const results = await runEval({ tasksDir: TASKS, reference: true, makeProvider: () => new MockProvider([]) });
   assert.ok(results.every((r) => r.passed), results.filter((r) => !r.passed).map((r) => r.id).join(","));

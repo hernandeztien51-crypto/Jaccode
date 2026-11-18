@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export class PathError extends Error {}
@@ -39,12 +40,13 @@ function realpathOrSelf(p: string): string {
 }
 
 function expandHome(p: string): string {
-  if (p === "~" || p.startsWith("~/")) return path.join(process.env.HOME ?? "", p.slice(1));
+  if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) return path.join(os.homedir(), p.slice(1));
   return p;
 }
 
 /** Path relative to the root, for display. */
 export function displayPath(root: string, abs: string): string {
   const rel = path.relative(realpathOrSelf(root), abs);
-  return rel === "" ? "." : rel;
+  // Forward slashes on every OS: one path style for the model, the transcript and training data.
+  return rel === "" ? "." : rel.split(path.sep).join("/");
 }

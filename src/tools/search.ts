@@ -67,7 +67,11 @@ export const grep = defineTool({
       output = jsGrep(target, i.pattern, !!i.ignore_case, i.glob);
     }
     const prefix = fs.realpathSync(ctx.root) + path.sep;
-    const lines = output.split("\n").filter(Boolean).map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l));
+    const lines = output
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => (l.startsWith(prefix) ? l.slice(prefix.length) : l))
+      .map((l) => (path.sep === "\\" ? l.replace(/^[^:]+/, (p) => p.replace(/\\/g, "/")) : l));
     if (lines.length === 0) return "No matches.";
     const shown = lines.slice(0, max);
     if (lines.length > max) shown.push(`… ${lines.length - max} more matches (narrow the search)`);

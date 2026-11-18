@@ -54,7 +54,7 @@ test("project plugins add commands and tools; broken manifests are reported, not
   const tool = demo.tools[0]!;
   assert.equal(tool.kind, "read");
   const ctx = { root, checkpoints: undefined as never, readFiles: new Map(), todos: [], signal: new AbortController().signal };
-  assert.match(await tool.run({ file: "a.txt" }, ctx), /^3\n\[exit code 0\]/);
+  assert.match(await tool.run({ file: "a.txt" }, ctx), /^\s*3\n\[exit code 0\]/); // macOS wc pads with spaces
   assert.equal(tool.schema.safeParse({}).success, false, "required args are enforced");
 });
 
